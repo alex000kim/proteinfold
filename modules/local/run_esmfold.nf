@@ -6,7 +6,7 @@ process RUN_ESMFOLD {
         error("Local RUN_ESMFOLD module does not support Conda. Please use Docker / Singularity / Podman instead.")
     }
 
-    container "nf-core/proteinfold_esmfold:1.1.1"
+    container "nf-core/proteinfold_esmfold:dev"
 
     input:
     tuple val(meta), path(fasta)
@@ -14,8 +14,8 @@ process RUN_ESMFOLD {
     val numRec
 
     output:
-    path ("${fasta.baseName}*.pdb"), emit: pdb
-    path ("${fasta.baseName}_plddt_mqc.tsv"), emit: multiqc
+    tuple val(meta), path ("${meta.id}_esmfold.pdb")  , emit: pdb
+    tuple val(meta), path ("${meta.id}_plddt_mqc.tsv"), emit: multiqc
     path "versions.yml", emit: versions
 
     when:
@@ -33,9 +33,12 @@ process RUN_ESMFOLD {
         --num-recycles ${numRec} \
         $args
 
-    awk '{print \$2"\\t"\$3"\\t"\$4"\\t"\$6"\\t"\$11}' "${fasta.baseName}"*.pdb | grep -v 'N/A' | uniq > plddt.tsv
+    mv  *.pdb tmp.pdb
+    mv  tmp.pdb ${meta.id}_esmfold.pdb
+
+    awk '{print \$2"\\t"\$3"\\t"\$4"\\t"\$6"\\t"\$11}' ${meta.id}_esmfold.pdb | grep -v 'N/A' | uniq > plddt.tsv
     echo -e Atom_serial_number"\\t"Atom_name"\\t"Residue_name"\\t"Residue_sequence_number"\\t"pLDDT > header.tsv
-    cat header.tsv plddt.tsv > "${fasta.baseName}"_plddt_mqc.tsv
+    cat header.tsv plddt.tsv > ${meta.id}_plddt_mqc.tsv
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
@@ -46,8 +49,8 @@ process RUN_ESMFOLD {
     stub:
     def VERSION = '1.0.3' // WARN: Version information not provided by tool on CLI. Please update this string when bumping container versions.
     """
-    touch ./"${fasta.baseName}".pdb
-    touch ./"${fasta.baseName}"_plddt_mqc.tsv
+    touch ./${meta.id}_esmfold.pdb
+    touch ./${meta.id}_plddt_mqc.tsv
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":

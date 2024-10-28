@@ -25,8 +25,7 @@ include { MULTIQC } from '../modules/nf-core/multiqc/main'
 //
 // SUBWORKFLOW: Consisting entirely of nf-core/modules
 //
-include { paramsSummaryMap       } from 'plugin/nf-validation'
-include { fromSamplesheet        } from 'plugin/nf-validation'
+include { paramsSummaryMap       } from 'plugin/nf-schema'
 include { paramsSummaryMultiqc   } from '../subworkflows/nf-core/utils_nfcore_pipeline'
 include { softwareVersionsToYAML } from '../subworkflows/nf-core/utils_nfcore_pipeline'
 include { methodsDescriptionText } from '../subworkflows/local/utils_nfcore_proteinfold_pipeline'
@@ -40,6 +39,7 @@ include { methodsDescriptionText } from '../subworkflows/local/utils_nfcore_prot
 workflow ALPHAFOLD2 {
 
     take:
+    ch_samplesheet          // channel: samplesheet read in from --input
     ch_versions             // channel: [ path(versions.yml) ]
     full_dbs                // boolean: Use full databases (otherwise reduced version)
     alphafold2_mode         //  string: Mode to run Alphafold2 in
@@ -57,22 +57,18 @@ workflow ALPHAFOLD2 {
 
     main:
     ch_multiqc_files = Channel.empty()
-
-    //
-    // Create input channel from input file provided through params.input
-    //
-    Channel
-        .fromSamplesheet("input")
-        .set { ch_fasta }
+    ch_pdb           = Channel.empty()
+    ch_main_pdb      = Channel.empty()
+    ch_msa           = Channel.empty()
 
     if (alphafold2_model_preset != 'multimer') {
-        ch_fasta
+        ch_samplesheet
             .map {
                 meta, fasta ->
                 [ meta, fasta.splitFasta(file:true) ]
             }
             .transpose()
-            .set { ch_fasta }
+            .set { ch_samplesheet }
     }
 
     if (alphafold2_mode == 'standard') {
@@ -80,7 +76,7 @@ workflow ALPHAFOLD2 {
         // SUBWORKFLOW: Run Alphafold2 standard mode
         //
         RUN_ALPHAFOLD2 (
-            ch_fasta,
+            ch_samplesheet,
             full_dbs,
             alphafold2_model_preset,
             ch_alphafold2_params,
@@ -94,7 +90,10 @@ workflow ALPHAFOLD2 {
             ch_pdb_seqres,
             ch_uniprot
         )
-        ch_multiqc_rep = RUN_ALPHAFOLD2.out.multiqc.collect()
+        ch_pdb         = ch_pdb.mix(RUN_ALPHAFOLD2.out.pdb)
+        ch_main_pdb    = ch_main_pdb.mix(RUN_ALPHAFOLD2.out.main_pdb)
+        ch_msa         = ch_msa.mix(RUN_ALPHAFOLD2.out.msa)
+        ch_multiqc_rep = RUN_ALPHAFOLD2.out.multiqc.map{it[1]}.collect()
         ch_versions    = ch_versions.mix(RUN_ALPHAFOLD2.out.versions)
 
     } else if (alphafold2_mode == 'split_msa_prediction') {
@@ -102,7 +101,7 @@ workflow ALPHAFOLD2 {
         // SUBWORKFLOW: Run Alphafold2 split mode, MSA and predicition
         //
         RUN_ALPHAFOLD2_MSA (
-            ch_fasta,
+            ch_samplesheet,
             full_dbs,
             alphafold2_model_preset,
             ch_alphafold2_params,
@@ -119,7 +118,7 @@ workflow ALPHAFOLD2 {
         ch_versions    = ch_versions.mix(RUN_ALPHAFOLD2_MSA.out.versions)
 
         RUN_ALPHAFOLD2_PRED (
-            ch_fasta,
+            ch_samplesheet,
             full_dbs,
             alphafold2_model_preset,
             ch_alphafold2_params,
@@ -134,7 +133,10 @@ workflow ALPHAFOLD2 {
             ch_uniprot,
             RUN_ALPHAFOLD2_MSA.out.features
         )
-        ch_multiqc_rep = RUN_ALPHAFOLD2_PRED.out.multiqc.collect()
+        ch_pdb         = ch_pdb.mix(RUN_ALPHAFOLD2_PRED.out.pdb)
+        ch_main_pdb    = ch_main_pdb.mix(RUN_ALPHAFOLD2_PRED.out.main_pdb)
+        ch_msa         = ch_msa.mix(RUN_ALPHAFOLD2_PRED.out.msa)
+        ch_multiqc_rep = RUN_ALPHAFOLD2_PRED.out.multiqc.map{it[1]}.collect()
         ch_versions = ch_versions.mix(RUN_ALPHAFOLD2_PRED.out.versions)
     }
 
@@ -142,9 +144,8 @@ workflow ALPHAFOLD2 {
     // Collate and save software versions
     //
     softwareVersionsToYAML(ch_versions)
-        .collectFile(storeDir: "${params.outdir}/pipeline_info", name: 'nf_core_proteinfold_software_mqc_versions.yml', sort: true, newLine: true)
+        .collectFile(storeDir: "${params.outdir}/pipeline_info", name: 'nf_core_proteinfold_software_mqc_alphafold2_versions.yml', sort: true, newLine: true)
         .set { ch_collated_versions }
-
     //
     // MODULE: MultiQC
     //
@@ -169,12 +170,17 @@ workflow ALPHAFOLD2 {
             ch_multiqc_files.collect(),
             ch_multiqc_config.toList(),
             ch_multiqc_custom_config.toList(),
-            ch_multiqc_logo.toList()
+            ch_multiqc_logo.toList(),
+            [],
+            []
         )
         ch_multiqc_report = MULTIQC.out.report.toList()
     }
 
     emit:
+    main_pdb = ch_main_pdb // channel: /path/to/*.pdb
+    pdb = ch_pdb // channel: /path/to/*.pdb
+    msa = ch_msa // channel: /path/to/*msa.tsv
     multiqc_report = ch_multiqc_report // channel: /path/to/multiqc_report.html
     versions       = ch_versions       // channel: [ path(versions.yml) ]
 }

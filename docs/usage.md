@@ -28,16 +28,18 @@ T1026,https://raw.githubusercontent.com/nf-core/test-datasets/proteinfold/testda
 
 The samplesheet can have as many columns as you desire, however, there is a strict requirement for the first 2 columns to match those defined in the table below:
 
-| Column     | Description                                                                                         |
-| ---------- | --------------------------------------------------------------------------------------------------- |
-| `sequence` | Custom sequence name. Spaces in sequence names are automatically converted to underscores (`_`).    |
-| `fasta`    | Full path to fasta file for the provided sequence. File has to have the extension ".fasta" or "fa". |
+| Column  | Description                                                                                         |
+| ------- | --------------------------------------------------------------------------------------------------- |
+| `id`    | Custom sequence name. Spaces in sequence names are automatically converted to underscores (`_`).    |
+| `fasta` | Full path to fasta file for the provided sequence. File has to have the extension ".fasta" or "fa". |
 
 An [example samplesheet](../assets/samplesheet.csv) has been provided with the pipeline.
 
 ## Running the pipeline
 
 The typical commands for running the pipeline on AlphaFold2, Colabfold and ESMFold modes are shown below.
+
+> You can run any combination of the models by providing them to the `--mode` parameter separated by a comma. For example: `--mode alphafold2,esmfold,colabfold` will run the three models in parallel.
 
 AlphaFold2 regular can be run using this command:
 
@@ -447,9 +449,9 @@ The above pipeline run specified with a params file in yaml format:
 nextflow run nf-core/proteinfold -profile docker -params-file params.yaml
 ```
 
-with `params.yaml` containing:
+with:
 
-```yaml
+```yaml title="params.yaml"
 input: './samplesheet.csv'
 outdir: './results/'
 genome: 'GRCh37'

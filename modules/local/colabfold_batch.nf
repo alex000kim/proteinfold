@@ -7,7 +7,7 @@ process COLABFOLD_BATCH {
         error("Local COLABFOLD_BATCH module does not support Conda. Please use Docker / Singularity / Podman instead.")
     }
 
-    container "nf-core/proteinfold_colabfold:1.1.1"
+    container "nf-core/proteinfold_colabfold:dev"
 
     input:
     tuple val(meta), path(fasta)
@@ -18,9 +18,11 @@ process COLABFOLD_BATCH {
     val   numRec
 
     output:
-    path ("*")         , emit: pdb
-    path ("*_mqc.png") , emit: multiqc
-    path "versions.yml", emit: versions
+    tuple val(meta), path ("${meta.id}_colabfold.pdb"), emit: main_pdb
+    tuple val(meta), path ("*_relaxed_rank_*.pdb"), emit: pdb
+    tuple val(meta), path ("*_coverage.png")      , emit: msa
+    tuple val(meta), path ("*_mqc.png")           , emit: multiqc
+    path "versions.yml"                           , emit: versions
 
     when:
     task.ext.when == null || task.ext.when
@@ -40,6 +42,7 @@ process COLABFOLD_BATCH {
         \$PWD
     for i in `find *_relaxed_rank_001*.pdb`; do cp \$i `echo \$i | sed "s|_relaxed_rank_|\t|g" | cut -f1`"_colabfold.pdb"; done
     for i in `find *.png -maxdepth 0`; do cp \$i \${i%'.png'}_mqc.png; done
+    cp *_relaxed_rank_001*.pdb ${meta.id}_colabfold.pdb
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
@@ -50,8 +53,13 @@ process COLABFOLD_BATCH {
     stub:
     def VERSION = '1.5.2' // WARN: Version information not provided by tool on CLI. Please update this string when bumping container versions.
     """
-    touch ./"${fasta.baseName}"_colabfold.pdb
-    touch ./"${fasta.baseName}"_mqc.png
+    touch ./"${meta.id}"_colabfold.pdb
+    touch ./"${meta.id}"_mqc.png
+    touch ./${meta.id}_relaxed_rank_01.pdb
+    touch ./${meta.id}_relaxed_rank_02.pdb
+    touch ./${meta.id}_relaxed_rank_03.pdb
+    touch ./${meta.id}_coverage.png
+    touch ./${meta.id}_scores_rank.json
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":

@@ -9,21 +9,21 @@
 ----------------------------------------------------------------------------------------
 */
 
-nextflow.enable.dsl = 2
-
 /*
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     IMPORT FUNCTIONS / MODULES / SUBWORKFLOWS / WORKFLOWS
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 */
 
-if (params.mode == "alphafold2") {
+if (params.mode.toLowerCase().split(",").contains("alphafold2")) {
     include { PREPARE_ALPHAFOLD2_DBS } from './subworkflows/local/prepare_alphafold2_dbs'
     include { ALPHAFOLD2             } from './workflows/alphafold2'
-} else if (params.mode == "colabfold") {
+}
+if (params.mode.toLowerCase().split(",").contains("colabfold")) {
     include { PREPARE_COLABFOLD_DBS } from './subworkflows/local/prepare_colabfold_dbs'
     include { COLABFOLD             } from './workflows/colabfold'
-} else if (params.mode == "esmfold") {
+}
+if (params.mode.toLowerCase().split(",").contains("esmfold")) {
     include { PREPARE_ESMFOLD_DBS } from './subworkflows/local/prepare_esmfold_dbs'
     include { ESMFOLD             } from './workflows/esmfold'
 }
@@ -32,6 +32,10 @@ include { PIPELINE_INITIALISATION          } from './subworkflows/local/utils_nf
 include { PIPELINE_COMPLETION              } from './subworkflows/local/utils_nfcore_proteinfold_pipeline'
 include { getColabfoldAlphafold2Params     } from './subworkflows/local/utils_nfcore_proteinfold_pipeline'
 include { getColabfoldAlphafold2ParamsPath } from './subworkflows/local/utils_nfcore_proteinfold_pipeline'
+
+include { GENERATE_REPORT     } from './modules/local/generate_report'
+include { COMPARE_STRUCTURES   } from './modules/local/compare_structures'
+include { FOLDSEEK_EASYSEARCH } from './modules/nf-core/foldseek/easysearch/main'
 
 /*
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -53,14 +57,19 @@ params.colabfold_alphafold2_params_path = getColabfoldAlphafold2ParamsPath()
 //
 workflow NFCORE_PROTEINFOLD {
 
-    main:
-    ch_multiqc  = Channel.empty()
-    ch_versions = Channel.empty()
+    take:
+    samplesheet // channel: samplesheet read in from --input
 
+    main:
+    ch_samplesheet  = samplesheet
+    ch_multiqc      = Channel.empty()
+    ch_versions     = Channel.empty()
+    ch_report_input = Channel.empty()
+    requested_modes = params.mode.toLowerCase().split(",")
     //
     // WORKFLOW: Run alphafold2
     //
-    if(params.mode == "alphafold2") {
+    if(requested_modes.contains("alphafold2")) {
         //
         // SUBWORKFLOW: Prepare Alphafold2 DBs
         //
@@ -96,6 +105,7 @@ workflow NFCORE_PROTEINFOLD {
         // WORKFLOW: Run nf-core/alphafold2 workflow
         //
         ALPHAFOLD2 (
+            ch_samplesheet,
             ch_versions,
             params.full_dbs,
             params.alphafold2_mode,
@@ -113,12 +123,15 @@ workflow NFCORE_PROTEINFOLD {
         )
         ch_multiqc  = ALPHAFOLD2.out.multiqc_report
         ch_versions = ch_versions.mix(ALPHAFOLD2.out.versions)
+        ch_report_input = ch_report_input.mix(
+            ALPHAFOLD2.out.pdb.join(ALPHAFOLD2.out.msa).map{it[0]["model"] = "alphafold2"; it}
+        )
     }
 
     //
     // WORKFLOW: Run colabfold
     //
-    else if(params.mode == "colabfold") {
+    if(requested_modes.contains("colabfold")) {
         //
         // SUBWORKFLOW: Prepare Colabfold DBs
         //
@@ -139,6 +152,7 @@ workflow NFCORE_PROTEINFOLD {
         // WORKFLOW: Run nf-core/colabfold workflow
         //
         COLABFOLD (
+            ch_samplesheet,
             ch_versions,
             params.colabfold_model_preset,
             PREPARE_COLABFOLD_DBS.out.params,
@@ -148,12 +162,19 @@ workflow NFCORE_PROTEINFOLD {
         )
         ch_multiqc  = COLABFOLD.out.multiqc_report
         ch_versions = ch_versions.mix(COLABFOLD.out.versions)
+        ch_report_input = ch_report_input.mix(
+            COLABFOLD
+                .out
+                .pdb
+                .join(COLABFOLD.out.msa)
+                .map { it[0]["model"] = "colabfold"; it }
+        )
     }
 
     //
     // WORKFLOW: Run esmfold
     //
-    else if(params.mode == "esmfold") {
+    if(requested_modes.contains("esmfold")) {
         //
         // SUBWORKFLOW: Prepare esmfold DBs
         //
@@ -170,16 +191,91 @@ workflow NFCORE_PROTEINFOLD {
         // WORKFLOW: Run nf-core/esmfold workflow
         //
         ESMFOLD (
+            ch_samplesheet,
             ch_versions,
             PREPARE_ESMFOLD_DBS.out.params,
             params.num_recycles_esmfold
         )
         ch_multiqc  = ESMFOLD.out.multiqc_report
         ch_versions = ch_versions.mix(ESMFOLD.out.versions)
+        ch_report_input = ch_report_input.mix(
+            ESMFOLD.out.pdb.combine(Channel.fromPath("$projectDir/assets/NO_FILE")).map{it[0]["model"] = "esmfold"; it}
+        )
     }
+    //
+    // POST PROCESSING: generate visulaisation reports
+    //
+    if (!params.skip_visualisation){
+        GENERATE_REPORT(
+            ch_report_input.map{[it[0], it[1]]},
+            ch_report_input.map{[it[0], it[2]]},
+            ch_report_input.map{it[0].model},
+            Channel.fromPath("$projectDir/assets/proteinfold_template.html", checkIfExists: true).first()
+        )
+        ch_versions = ch_versions.mix(GENERATE_REPORT.out.versions)
+        //GENERATE_REPORT.out.sequence_coverage.view()
+        if (requested_modes.size() > 1){
+            ch_report_input.filter{it[0]["model"] == "esmfold"}
+            .map{[it[0]["id"], it[0], it[1], it[2]]}
+            .set{ch_comparision_report_files}
+
+            if (requested_modes.contains("alphafold2")) {
+                ch_comparision_report_files = ch_comparision_report_files.mix(
+                    ALPHAFOLD2
+                    .out
+                    .main_pdb
+                    .map{[it[0]["id"], it[0], it[1]]}
+                    .join(GENERATE_REPORT.out.sequence_coverage
+                            .filter{it[0]["model"] == "alphafold2"}
+                            .map{[it[0]["id"], it[1]]}, remainder:true
+                    )
+                )
+            }
+            if (requested_modes.contains("colabfold")) {
+                ch_comparision_report_files = ch_comparision_report_files.mix(
+                    COLABFOLD
+                    .out
+                    .main_pdb
+                    .map{[it[0]["id"], it[0], it[1]]}
+                    .join(COLABFOLD.out.msa
+                            .map{[it[0]["id"], it[1]]},
+                        remainder:true
+                    )
+                )
+            }
+
+            ch_comparision_report_files
+                .groupTuple(by: [0], size: requested_modes.size())
+                .set{ch_comparision_report_input}
+
+            COMPARE_STRUCTURES(
+                ch_comparision_report_input.map{it[1][0]["models"] = params.mode.toLowerCase(); [it[1][0], it[2]]},
+                ch_comparision_report_input.map{it[1][0]["models"] = params.mode.toLowerCase(); [it[1][0], it[3]]},
+                Channel.fromPath("$projectDir/assets/comparison_template.html", checkIfExists: true).first()
+            )
+            ch_versions = ch_versions.mix(COMPARE_STRUCTURES.out.versions)
+        }
+    }
+
+    if (params.foldseek_search == "easysearch"){
+        ch_foldseek_db = channel.value([["id": params.foldseek_db],
+                                        file(params.foldseek_db_path,
+                                            checkIfExists: true)])
+
+        FOLDSEEK_EASYSEARCH(
+            ch_report_input
+            .map{
+                if (it[0].model == "esmfold")
+                    [it[0], it[1]]
+                else
+                    [it[0], it[1][0]]
+                },
+            ch_foldseek_db
+        )
+    }
+
     emit:
-    multiqc_report = ch_multiqc  // channel: /path/to/multiqc_report.html
-    versions       = ch_versions // channel: [version1, version2, ...]
+    multiqc_report = ch_multiqc
 }
 
 /*
@@ -196,17 +292,19 @@ workflow {
     //
     PIPELINE_INITIALISATION (
         params.version,
-        params.help,
         params.validate_params,
         params.monochrome_logs,
         args,
-        params.outdir
+        params.outdir,
+        params.input
     )
 
     //
     // WORKFLOW: Run main workflow
     //
-    NFCORE_PROTEINFOLD ()
+    NFCORE_PROTEINFOLD (
+        PIPELINE_INITIALISATION.out.samplesheet
+    )
 
     //
     // SUBWORKFLOW: Run completion tasks
